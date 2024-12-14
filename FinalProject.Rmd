@@ -1,0 +1,254 @@
+
+# Final Project
+# Group Member 1: Nithin Kumar Reddy Annapu Reddy - UIN: 676747364
+# Group Member 2: Tapan Siddarth Narra - UIN: 670817130
+
+```{r}
+# Install all the neccessary packages 
+if (!requireNamespace("ggplot2", quietly = TRUE)) install.packages("ggplot2")
+if (!requireNamespace("dplyr", quietly = TRUE)) install.packages("dplyr")
+if (!requireNamespace("reshape2", quietly = TRUE)) install.packages("reshape2")
+if (!requireNamespace("RColorBrewer", quietly = TRUE)) install.packages("RColorBrewer")
+if (!requireNamespace("smotefamily", quietly = TRUE)) install.packages("smotefamily")
+if (!requireNamespace("caret", quietly = TRUE)) install.packages("caret")
+if (!requireNamespace("yardstick", quietly = TRUE)) install.packages("yardstick")
+if (!requireNamespace("e1071", quietly = TRUE)) install.packages("e1071")
+if (!requireNamespace("randomforest", quietly = TRUE)) install.packages("randomforest")
+
+library(ggplot2)
+library(dplyr)
+library(reshape2)
+library(RColorBrewer)
+library(smotefamily)
+library(caret)
+library(yardstick)
+library(e1071)
+library(randomForest)
+```
+
+```{r}
+df = read.csv("survey lung cancer.csv", stringsAsFactors = TRUE)
+head(df)
+```
+
+```{r}
+str(df)
+```
+
+```{r}
+summary(df)
+```
+
+```{r}
+# check for Duplicates and remove them
+sum(duplicated(df))  # Count duplicates
+df <- df[!duplicated(df), ]  # Drop duplicates
+```
+
+```{r}
+# Check if there are any missing values
+colSums(is.na(df))
+```
+
+```{r}
+# Gender and Lung_cancer columns are factor, hence convert them into Numeric columns
+df$GENDER = as.numeric(df$GENDER)-1
+df$LUNG_CANCER = as.numeric(df$LUNG_CANCER)-1
+```
+
+```{r}
+# Random forest, SVM, Logistic regression, KNN are sensitive to scale of columns
+# hence scale down variables that have high difference in scale
+df$AGE = scale(df$AGE)
+str(df)
+```
+
+```{r}
+print(table(df$LUNG_CANCER))
+barplot(table(df$LUNG_CANCER), 
+        main = "Frequency of LUNG_CANCER", 
+        xlab = "LUNG_CANCER", ylab = "Frequency", 
+        col = "lightblue", border = "black")
+
+```
+
+```{r}
+# Function to create the plot
+plot_col <- function(col, df) {
+  # Normalize value counts
+  df_normalized <- df %>%
+    group_by(.data[[col]], LUNG_CANCER) %>%
+    summarise(Count = n(), .groups = "drop") %>%
+    group_by(.data[[col]]) %>%
+    mutate(Proportion = Count / sum(Count))
+  
+  # Create the bar plot
+  plot <- ggplot(df_normalized, aes(x = .data[[col]], y = Proportion, fill = as.factor(LUNG_CANCER))) +
+    geom_bar(stat = "identity", position = "dodge") +
+    labs(title = paste("Normalized Value Counts by", col),
+         x = col, y = "Proportion", fill = "LUNG_CANCER") +
+    theme_minimal() +
+    theme(legend.position = "top")
+  
+  print(plot) # Ensure the plot is printed inside the function
+}
+
+# Call the function for all character or factor columns in df
+for (col in names(df)) {
+  if(col != "LUNG_CANCER"){
+    plot_col(col, df)
+  }
+}
+```
+
+```{r}
+# Based on the above plots we can remove some columns:
+# 'GENDER','AGE', 'SMOKING', 'SHORTNESS OF BREATH']
+df$GENDER = NULL
+df$AGE = NULL
+df$SMOKING = NULL
+df$SHORTNESS.OF.BREATH = NULL
+```
+
+
+```{r}
+# Compute correlation matrix
+cor_matrix <- cor(df, use = "complete.obs")  # Replace df with your actual data frame
+
+# Melt the correlation matrix
+melted_cor_matrix <- melt(cor_matrix)
+
+# Create a diverging color palette
+cmap <- colorRampPalette(brewer.pal(11, "RdBu"))(100)
+
+# Plot the heatmap
+ggplot(data = melted_cor_matrix, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradientn(colors = cmap, limits = c(-1, 1), name = "Correlation") +
+  theme_minimal() +
+  labs(title = "Correlation Heatmap", x = NULL, y = NULL) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.text.y = element_text(angle = 0, hjust = 1)) +
+  coord_fixed()
+```
+
+```{r}
+# The correlation matrix shows that ANXIETY and YELLOW_FINGERS are correlated more than 50%. So, lets create a new feature combining them.
+df$ANXYELFIN = df$ANXIETY * df$YELLOW_FINGERS
+str(df$ANXYELFIN)
+summary(df$ANXYELFIN)
+```
+
+```{r}
+# Splitting independent variables (X)
+X <- df[, !names(df) %in% "LUNG_CANCER"]
+# Splitting dependent variable (y)
+y <- df$LUNG_CANCER
+str(y)
+```
+
+```{r}
+# there are many methods to handle the imbalance nature of a variable, one of them is to downsample the majority class. Problem with this approach is that, when we have less samples in the data set it will lead to significant data loss
+
+y <- as.factor(y)
+
+# Apply SMOTE
+smote_result <- SMOTE(X, y, K = 5, dup_size = 2) 
+
+# Extract resampled data
+X <- smote_result$data[, -ncol(smote_result$data)]
+y <- smote_result$data[, ncol(smote_result$data)]
+y = as.factor(y)
+
+# Check the length of the resampled dataset
+nrow(X)
+```
+
+```{r}
+# Split the data into training and testing sets
+set.seed(0)
+train_index <- createDataPartition(y, p = 0.75, list = FALSE)
+X_train <- X[train_index, ]
+X_test <- X[-train_index, ]
+y_train <- y[train_index]
+y_test <- y[-train_index]
+
+# Fit logistic regression model
+logistic_model <- glm(y_train ~ ., data = cbind(X_train, y_train), family = binomial)
+
+# Predict on test data
+y_lr_pred_prob <- predict(logistic_model, newdata = X_test, type = "response")
+y_lr_pred <- ifelse(y_lr_pred_prob > 0.5, 1, 0)
+
+# Convert predictions and test set to factors for comparison
+y_lr_pred <- as.factor(y_lr_pred)
+y_test <- as.factor(y_test)
+
+accuracy <- sum(y_lr_pred == y_test) / length(y_test)
+cat("Accuracy:", accuracy, "\n")
+
+# Generate classification report
+confusion <- confusionMatrix(data = y_lr_pred, reference = y_test)
+print(confusion)
+
+# Optional: Compute F1 score using yardstick
+f1 <- f_meas_vec(truth = y_test, estimate = y_lr_pred)
+cat("F1 Score:", f1, "\n")
+```
+
+```{r}
+# Fit SVM model
+svc_model <- svm(y_train ~ ., data = cbind(X_train, y_train), kernel = "radial")
+
+# Predict on test data
+y_svc_pred <- predict(svc_model, X_test)
+
+# Model accuracy
+accuracy <- sum(y_svc_pred == y_test) / length(y_test)
+cat("Accuracy:", accuracy, "\n")
+
+# Generate classification report
+confusion <- confusionMatrix(data = y_svc_pred, reference = y_test)
+print(confusion)
+
+# Optional: Compute F1 score using yardstick
+f1 <- f_meas_vec(truth = y_test, estimate = y_svc_pred)
+cat("F1 Score:", f1, "\n")
+```
+
+```{r}
+# Fit Random Forest model
+rf_model <- randomForest(x = X_train, y = y_train, ntree = 100, mtry = 2, importance = TRUE)
+
+# Predict on test data
+y_rf_pred <- predict(rf_model, X_test)
+
+# Model accuracy
+accuracy <- sum(y_rf_pred == y_test) / length(y_test)
+cat("Accuracy:", accuracy, "\n")
+
+# Generate classification report
+confusion <- confusionMatrix(data = y_rf_pred, reference = y_test)
+print(confusion)
+
+# Optional: Compute F1 score using yardstick
+f1 <- f_meas_vec(truth = y_test, estimate = y_rf_pred)
+cat("F1 Score:", f1, "\n")
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
